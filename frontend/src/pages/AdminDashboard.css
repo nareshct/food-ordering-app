@@ -1,0 +1,14 @@
+/* AdminDashboard.css — minimal, all layout done inline */
+.admin-content { padding: 28px 0 48px; }
+
+/* Spinner utility */
+.loading-container {
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  min-height: 400px; gap: 20px;
+}
+
+/* Responsive table scroll */
+@media (max-width: 768px) {
+  table { min-width: 640px; }
+}
