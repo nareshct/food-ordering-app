@@ -155,13 +155,15 @@ app.use('/api/favorites',   require('./routes/favoriteRoutes'));
 app.use('/api/promo',       promoRoutes);
 app.use('/api/upload',      require('./routes/uploadRoutes'));   // ← Image uploads
 
-app.get('/', (req, res) => {
-  res.json({
-    message: '🍔 FoodOrder API is running!',
-    version: '2.0.0',
-    features: ['real-time-tracking', 'image-uploads', 'loyalty-points']
+if (process.env.NODE_ENV !== 'production') {
+  app.get('/', (req, res) => {
+    res.json({
+      message: '🍔 FoodOrder API is running!',
+      version: '2.0.0',
+      features: ['real-time-tracking', 'image-uploads', 'loyalty-points']
+    });
   });
-});
+}
 
 app.use((err, req, res, next) => {
   console.error(err.stack);
@@ -177,10 +179,10 @@ app.use((err, req, res, next) => {
 // ── Serve React frontend in production ─────────────────────────────────────
 // IMPORTANT: Place AFTER all /api routes so API calls are not intercepted
 if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, 'build')));
+  app.use(express.static(path.join(__dirname, '../frontend/build')));
   // Catch-all: serve React app for any non-API route
   app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'build', 'index.html'));
+    res.sendFile(path.join(__dirname, '../frontend/build', 'index.html'));
   });
 }
 
