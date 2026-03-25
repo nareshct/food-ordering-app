@@ -12,10 +12,11 @@ const AdminDashboard = () => {
 
   const [activeTab, setActiveTab] = useState('overview');
   const [promos, setPromos] = useState([]);
-  const [promoForm, setPromoForm] = useState({ code:'', description:'', discountType:'percentage', discountValue:'', minOrderAmount:'', maxDiscountAmount:'', usageLimit:'', onePerUser:true, isActive:true, expiresAt:'' });
+  const [promoForm, setPromoForm] = useState({ code:'', description:'', discountType:'percentage', discountValue:'', minOrderAmount:'', maxDiscountAmount:'', usageLimit:'', onePerUser:true, isActive:true, expiresAt:'', restaurant:'', appliesTo:'all', menuItems:[] });
   const [showPromoForm, setShowPromoForm] = useState(false);
   const [editingPromo, setEditingPromo] = useState(null);
   const [promoMsg, setPromoMsg] = useState({ type:'', text:'' });
+  const [promoMenuItems, setPromoMenuItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({ totalUsers:0, totalRestaurants:0, totalOrders:0, totalRevenue:0, todayOrders:0, pendingOrders:0, customers:0, restaurantOwners:0 });
   const [users, setUsers] = useState([]);
@@ -657,7 +658,7 @@ const AdminDashboard = () => {
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
               <h3 style={{ margin:0, fontSize:18, fontWeight:800, color:'#1a202c' }}>🎟️ Promo Codes</h3>
               <button onClick={() => { setShowPromoForm(true); setEditingPromo(null);
-                setPromoForm({ code:'', description:'', discountType:'percentage', discountValue:'', minOrderAmount:'', maxDiscountAmount:'', usageLimit:'', onePerUser:true, isActive:true, expiresAt:'' });
+                setPromoForm({ code:'', description:'', discountType:'percentage', discountValue:'', minOrderAmount:'', maxDiscountAmount:'', usageLimit:'', onePerUser:true, isActive:true, expiresAt:'', restaurant:'', appliesTo:'all', menuItems:[] }); setPromoMenuItems([]);
                 setPromoMsg({type:'',text:''}); }}
                 className="btn btn-primary">➕ Create Promo</button>
             </div>
@@ -718,6 +719,54 @@ const AdminDashboard = () => {
                       value={promoForm.expiresAt} onChange={e=>setPromoForm(p=>({...p,expiresAt:e.target.value}))} />
                   </div>
                 </div>
+                {/* Restaurant selector */}
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginTop:12 }}>
+                  <div className="form-group" style={{ marginBottom:0 }}>
+                    <label className="form-label">Restaurant (leave blank = all restaurants)</label>
+                    <select className="form-control" value={promoForm.restaurant} onChange={async e => {
+                      const rid = e.target.value;
+                      setPromoForm(p=>({...p, restaurant:rid, appliesTo:'all', menuItems:[]}));
+                      if (rid) {
+                        try {
+                          const token = localStorage.getItem('token');
+                          const res = await axios.get(config.getApiUrl(`/api/menu/${rid}`), { headers:{'Authorization':`Bearer ${token}`} });
+                          setPromoMenuItems(res.data.data || []);
+                        } catch { setPromoMenuItems([]); }
+                      } else { setPromoMenuItems([]); }
+                    }}>
+                      <option value="">🌐 All Restaurants (Global)</option>
+                      {restaurants.map(r => <option key={r._id} value={r._id}>{r.name}</option>)}
+                    </select>
+                  </div>
+                  <div className="form-group" style={{ marginBottom:0 }}>
+                    <label className="form-label">Applies To</label>
+                    <select className="form-control" value={promoForm.appliesTo} onChange={e=>setPromoForm(p=>({...p,appliesTo:e.target.value,menuItems:[]}))} disabled={!promoForm.restaurant}>
+                      <option value="all">All Items</option>
+                      <option value="specific">Specific Menu Items</option>
+                    </select>
+                  </div>
+                </div>
+                {/* Specific menu items multi-select */}
+                {promoForm.restaurant && promoForm.appliesTo === 'specific' && (
+                  <div className="form-group" style={{ marginTop:12 }}>
+                    <label className="form-label">Select Menu Items (hold Ctrl/Cmd to select multiple)</label>
+                    <select multiple className="form-control" style={{ height:120 }}
+                      value={promoForm.menuItems}
+                      onChange={e => {
+                        const selected = Array.from(e.target.selectedOptions).map(o => o.value);
+                        setPromoForm(p=>({...p, menuItems:selected}));
+                      }}>
+                      {promoMenuItems.map(item => (
+                        <option key={item._id} value={item._id}>{item.name} — ₹{item.price}</option>
+                      ))}
+                    </select>
+                    {promoForm.menuItems.length > 0 && (
+                      <div style={{ fontSize:12, color:'#667eea', marginTop:4 }}>
+                        ✅ {promoForm.menuItems.length} item(s) selected
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div style={{ display:'flex', gap:20, marginTop:14 }}>
                   <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', fontSize:13, fontWeight:600 }}>
                     <input type="checkbox" checked={promoForm.onePerUser} onChange={e=>setPromoForm(p=>({...p,onePerUser:e.target.checked}))} />
@@ -741,7 +790,10 @@ const AdminDashboard = () => {
                         maxDiscountAmount:promoForm.maxDiscountAmount?Number(promoForm.maxDiscountAmount):null,
                         usageLimit:promoForm.usageLimit?Number(promoForm.usageLimit):null,
                         onePerUser:promoForm.onePerUser, isActive:promoForm.isActive,
-                        expiresAt:promoForm.expiresAt||null };
+                        expiresAt:promoForm.expiresAt||null,
+                        restaurant: promoForm.restaurant || null,
+                        appliesTo: promoForm.appliesTo || 'all',
+                        menuItems: promoForm.appliesTo === 'specific' ? promoForm.menuItems : [] };
                       if (editingPromo) {
                         const r = await axios.put(config.getApiUrl(`/api/promo/${editingPromo._id}`), payload, { headers:{'Authorization':`Bearer ${token}`} });
                         setPromos(prev => prev.map(p => p._id===editingPromo._id ? r.data.data : p));
@@ -761,16 +813,23 @@ const AdminDashboard = () => {
 
             <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
               {promos.length === 0 && <div style={{ textAlign:'center', padding:40, color:'#a0aec0' }}>No promo codes yet. Create one above!</div>}
-              {promos.map(p => (
+              {promos.filter(p => {
+                const isExpired = p.expiresAt && new Date() > new Date(p.expiresAt);
+                return !isExpired;
+              }).map(p => {
+                const isExpired = p.expiresAt && new Date() > new Date(p.expiresAt);
+                return (
                 <div key={p._id} style={{ background:'white', borderRadius:12, padding:'14px 18px',
-                  border:`1.5px solid ${p.isActive?'#e2e6f0':'#fca5a5'}`, boxShadow:'0 1px 4px rgba(26,26,46,0.06)', opacity:p.isActive?1:0.7 }}>
+                  border:`1.5px solid ${isExpired?'#d1d5db':p.isActive?'#e2e6f0':'#fca5a5'}`, boxShadow:'0 1px 4px rgba(26,26,46,0.06)', opacity:isExpired?0.5:p.isActive?1:0.7 }}>
                   <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', flexWrap:'wrap', gap:10 }}>
                     <div>
                       <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4, flexWrap:'wrap' }}>
                         <span style={{ fontWeight:900, fontSize:16, color:'#1a202c', letterSpacing:'0.05em' }}>{p.code}</span>
                         {p.isDailyPromo && <span style={{ padding:'2px 8px', borderRadius:10, background:'#fff7ed', color:'#9a3412', fontSize:11, fontWeight:700, border:'1px solid #fdba74' }}>🗓️ Daily</span>}
-                        {!p.isActive && <span style={{ padding:'2px 8px', borderRadius:10, background:'#fef2f2', color:'#991b1b', fontSize:11, fontWeight:700 }}>Inactive</span>}
-                        {p.restaurant && <span style={{ padding:'2px 8px', borderRadius:10, background:'#eff6ff', color:'#1e40af', fontSize:11, fontWeight:700, border:'1px solid #bfdbfe' }}>🏪 Restaurant</span>}
+                        {isExpired && <span style={{ padding:'2px 8px', borderRadius:10, background:'#f3f4f6', color:'#6b7280', fontSize:11, fontWeight:700, border:'1px solid #d1d5db' }}>⏰ Expired</span>}
+                        {!isExpired && !p.isActive && <span style={{ padding:'2px 8px', borderRadius:10, background:'#fef2f2', color:'#991b1b', fontSize:11, fontWeight:700 }}>Inactive</span>}
+                        {p.restaurant && <span style={{ padding:'2px 8px', borderRadius:10, background:'#eff6ff', color:'#1e40af', fontSize:11, fontWeight:700, border:'1px solid #bfdbfe' }}>🏪 {p.restaurant?.name||'Restaurant'}</span>}
+                        {p.appliesTo==='specific' && p.menuItems?.length>0 && <span style={{ padding:'2px 8px', borderRadius:10, background:'#fdf4ff', color:'#7e22ce', fontSize:11, fontWeight:700, border:'1px solid #e9d5ff' }}>🍽️ {p.menuItems.length} item(s)</span>}
                       </div>
                       <div style={{ fontSize:13, color:'#4a5568', marginBottom:4 }}>{p.description}</div>
                       <div style={{ fontSize:12, color:'#718096', display:'flex', gap:14, flexWrap:'wrap' }}>
@@ -787,7 +846,17 @@ const AdminDashboard = () => {
                           discountValue:p.discountValue, minOrderAmount:p.minOrderAmount||'',
                           maxDiscountAmount:p.maxDiscountAmount||'', usageLimit:p.usageLimit||'',
                           onePerUser:p.onePerUser, isActive:p.isActive,
-                          expiresAt:p.expiresAt?new Date(p.expiresAt).toISOString().slice(0,16):'' });
+                          expiresAt:p.expiresAt?new Date(p.expiresAt).toISOString().slice(0,16):'',
+                          restaurant:p.restaurant?._id||p.restaurant||'',
+                          appliesTo:p.appliesTo||'all',
+                          menuItems:(p.menuItems||[]).map(m=>m._id||m) });
+                        if (p.restaurant) {
+                          const rid = p.restaurant?._id||p.restaurant;
+                          const token = localStorage.getItem('token');
+                          axios.get(config.getApiUrl(`/api/menu/${rid}`), { headers:{'Authorization':`Bearer ${token}`} })
+                            .then(res => setPromoMenuItems(res.data.data||[]))
+                            .catch(()=>setPromoMenuItems([]));
+                        } else { setPromoMenuItems([]); }
                         setPromoMsg({type:'',text:''}); window.scrollTo({top:0,behavior:'smooth'}); }}
                         className="btn btn-outline btn-sm">✏️ Edit</button>
                       <button onClick={async () => {
@@ -802,7 +871,7 @@ const AdminDashboard = () => {
                     </div>
                   </div>
                 </div>
-              ))}
+              );})}
             </div>
           </div>
         )}

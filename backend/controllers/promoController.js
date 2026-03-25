@@ -244,13 +244,27 @@ exports.createPromo = async (req, res) => {
     const createdBy = req.user.role === 'admin' ? 'admin' : 'restaurant';
     const promo = await PromoCode.create({ ...req.body, createdBy });
     res.status(201).json({ success:true, data:promo });
-    // If restaurant created this promo, notify their past customers
-    if (req.body.restaurant && createdBy === 'restaurant') {
+    // Notify past customers when any promo (admin or restaurant) targets a restaurant
+    if (req.body.restaurant) {
       const Restaurant = require('../models/Restaurant');
-      const rest2 = await Restaurant.findById(req.body.restaurant).select('name');
+      const rest2 = await Restaurant.findById(req.body.restaurant).select('name owner');
       const restName2 = rest2 ? rest2.name : 'Your favourite restaurant';
+      // Notify past customers
       notifyPastCustomers(req, req.body.restaurant, promo, restName2)
         .catch(e => console.error('Notify error:', e.message));
+      // Notify restaurant owner via socket if admin created it
+      if (createdBy === 'admin' && rest2) {
+        const io = req.app.get('io');
+        if (io && rest2.owner) {
+          io.to(`user_${rest2.owner}`).emit('promoNotification', {
+            type: 'adminPromoCreated',
+            message: `🎟️ Admin created a promo code "${promo.code}" for your restaurant!`,
+            code: promo.code,
+            description: promo.description,
+            timestamp: new Date()
+          });
+        }
+      }
     }
   } catch (e) {
     if (e.code === 11000) return res.status(400).json({ success:false, message:'Promo code already exists' });

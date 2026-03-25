@@ -1,3 +1,6 @@
+const dns = require("dns");
+dns.setServers(["8.8.8.8", "1.1.1.1"]);
+dns.setDefaultResultOrder("ipv4first");
 const mongoose = require('mongoose');
 const User = require('./models/User');
 const Restaurant = require('./models/Restaurant');
@@ -28,7 +31,7 @@ const seedData = async () => {
     const customer = await User.create({
       name: 'Udhaya Kumar Customer',
       email: 'customer@gmail.com',
-      password: 'password123',
+      password: 'pass123',
       phone: '8596234715',
       role: 'customer',
       address: {
@@ -44,7 +47,7 @@ const seedData = async () => {
     const owner = await User.create({
       name: 'Taj Restaurant',
       email: 'owner@gmail.com',
-      password: 'password123',
+      password: 'pass123',
       phone: '9874586327',
       role: 'restaurant_owner',
       address: {
@@ -60,7 +63,7 @@ const seedData = async () => {
     const admin = await User.create({
       name: 'Admin User',
       email: 'admin@gmail.com',
-      password: 'password123',
+      password: 'pass123',
       phone: '8597641253',
       role: 'admin'
     });
@@ -446,15 +449,15 @@ const seedData = async () => {
     console.log('═══════════════════════════════════════');
     console.log('👤 Customer:');
     console.log('   Email: customer@gmail.com');
-    console.log('   Password: password123');
+    console.log('   Password: pass123');
     console.log('');
     console.log('🏪 Restaurant Owner:');
     console.log('   Email: owner@gmail.com');
-    console.log('   Password: password123');
+    console.log('   Password: pass123');
     console.log('');
     console.log('👨‍💼 Admin:');
     console.log('   Email: admin@gmail.com');
-    console.log('   Password: password123');
+    console.log('   Password: pass123');
     console.log('═══════════════════════════════════════');
     console.log('\n📊 RESTAURANTS CREATED:');
     console.log('═══════════════════════════════════════');

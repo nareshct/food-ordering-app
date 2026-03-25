@@ -1,10 +1,14 @@
 const express     = require('express');
+const path        = require('path');
 const compression = require('compression');
 const http     = require('http');
 const { Server } = require('socket.io');
 const mongoose = require('mongoose');
 const cors     = require('cors');
 const dotenv   = require('dotenv');
+const dns = require("dns");
+dns.setServers(["8.8.8.8", "1.1.1.1"]);
+dns.setDefaultResultOrder("ipv4first");
 
 dotenv.config();
 
@@ -68,13 +72,25 @@ app.use('/uploads', (req, res, next) => {
 }, express.static('uploads'));
 
 // ── MongoDB ───────────────────────────────────────────────────────────────────
-mongoose.connect(process.env.MONGODB_URI, {
-  maxPoolSize: 10,        // keep up to 10 open connections
-  serverSelectionTimeoutMS: 5000,
+// Atlas needs longer timeouts than local MongoDB
+const mongoOpts = {
+  maxPoolSize: 10,
+  serverSelectionTimeoutMS: 30000,  // 30s — Atlas SRV lookup can be slow
   socketTimeoutMS: 45000,
-})
-  .then(() => console.log('✅ MongoDB connected successfully'))
-  .catch((err) => console.error('❌ MongoDB connection error:', err));
+  connectTimeoutMS: 30000,
+  family: 4,                        // force IPv4 — avoids IPv6 DNS issues on EC2
+};
+
+const connectWithRetry = () => {
+  mongoose.connect(process.env.MONGODB_URI, mongoOpts)
+    .then(() => console.log('✅ MongoDB Atlas connected successfully'))
+    .catch((err) => {
+      console.error('❌ MongoDB connection error:', err.message);
+      console.log('⏳ Retrying in 5 seconds...');
+      setTimeout(connectWithRetry, 5000);
+    });
+};
+connectWithRetry();
 
 // ── Scheduled Order Processor ────────────────────────────────────────────────
 // Runs every 60 seconds. Finds scheduled orders whose time has arrived and
@@ -157,6 +173,16 @@ app.use((err, req, res, next) => {
       : err.message || 'Internal Server Error'
   });
 });
+
+// ── Serve React frontend in production ─────────────────────────────────────
+// IMPORTANT: Place AFTER all /api routes so API calls are not intercepted
+if (process.env.NODE_ENV === 'production') {
+  app.use(express.static(path.join(__dirname, 'build')));
+  // Catch-all: serve React app for any non-API route
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'build', 'index.html'));
+  });
+}
 
 app.use((req, res) => {
   res.status(404).json({ success: false, message: 'Route not found' });

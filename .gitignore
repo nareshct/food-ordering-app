@@ -15,6 +15,7 @@ npm-debug.log*
 
 # ── React build output ────────────────────────────────────────────────────────
 frontend/build/
+backend/build/
 
 # ── Uploads (user-generated content, not source code) ────────────────────────
 backend/uploads/avatars/*
