@@ -71,6 +71,18 @@ app.use('/uploads', (req, res, next) => {
   next();
 }, express.static('uploads'));
 
+// ── Health check (for the ALB target group) ─────────────────────────────────
+// Kept outside the NODE_ENV production check below and above the SPA
+// catch-all route, so the ALB always has something to hit regardless of
+// environment, and it never gets swallowed by the React catch-all.
+app.get('/health', (req, res) => {
+  const dbConnected = mongoose.connection.readyState === 1; // 1 = connected
+  res.status(dbConnected ? 200 : 503).json({
+    status: dbConnected ? 'ok' : 'degraded',
+    db: dbConnected ? 'connected' : 'not connected'
+  });
+});
+
 // ── MongoDB ───────────────────────────────────────────────────────────────────
 // Atlas needs longer timeouts than local MongoDB
 const mongoOpts = {
