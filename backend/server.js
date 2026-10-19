@@ -69,7 +69,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use('/uploads', (req, res, next) => {
   res.setHeader('Cache-Control', 'public, max-age=604800');
   next();
-}, express.static('uploads'));
+}, express.static(path.join(__dirname, 'uploads')));
 
 // ── Health check (for the ALB target group) ─────────────────────────────────
 // Kept outside the NODE_ENV production check below and above the SPA
