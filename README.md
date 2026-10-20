@@ -1,241 +1,187 @@
-# 🍔 FoodOrder — Online Food Ordering App
+# 🍔 FoodOrder — Deployment Guide
 
-A full-stack food ordering platform (React + Node/Express + MongoDB Atlas,
-real-time order tracking via Socket.io, S3-backed image uploads). This repo is
-built to be **run as a single deployed service**, not just developed locally —
-the backend serves the built React app itself, so there's one process and one
-port to put behind a reverse proxy in production.
-
-## 🌐 Live Demo
-> Currently deployed via the Windows Server + AWS EC2 runbook in
-> [`WINDOWS_DEPLOYMENT.md`](./WINDOWS_DEPLOYMENT.md).
+Food ordering platform (React + Node/Express + MongoDB Atlas, Socket.io
+real-time tracking, S3-backed image uploads). **This repo exists to be
+deployed and operated, not developed on day-to-day** — the backend compiles
+down to a single process that serves both the API and the built frontend, and
+that single-process model is the only supported way to run this app in
+anything resembling production.
 
 ---
 
-## 🏗️ Production Architecture
+## Architecture
 
 ```
 Browser
    │  HTTPS (443) / HTTP (80)
    ▼
 Reverse proxy (nginx)  ──▶  Node/Express process (PM2-managed, port 8000)
-                                 ├─ Serves REST API under /api/*
-                                 ├─ Serves built React app (frontend/build) for every other route
+                                 ├─ REST API under /api/*
+                                 ├─ Built React app (frontend/build) for every other route
                                  ├─ Socket.io on the same HTTP server (needs WS upgrade headers at the proxy)
-                                 └─ /health — used by a load balancer / uptime check
+                                 └─ /health — load balancer / uptime target
                                        │
                                        ├─▶ MongoDB Atlas (cloud, not self-hosted)
-                                       └─▶ AWS S3 (menu/image uploads, via EC2 instance IAM role — no access keys on disk)
+                                       └─▶ AWS S3 (image uploads, via instance IAM role — no access keys on disk)
 ```
 
-Key implication: **the frontend must be built (`npm run build`) and the
-backend must run with `NODE_ENV=production`** for this single-process model to
-serve the app — `backend/server.js` only mounts the React catch-all route and
-`frontend/build` static files when `NODE_ENV=production`. In any other mode,
-the backend is API-only and expects a separate frontend dev server.
+One process, one port. `backend/server.js` only mounts the React catch-all +
+`frontend/build` static files when `NODE_ENV=production`; otherwise it's
+API-only. There is no supported "frontend server + backend server" split in
+production — if both are running separately, something is misconfigured.
 
 ---
 
-## 🚀 Deploying
+## What you need provisioned before deploying
 
-This section is the generic, platform-agnostic checklist. For a fully worked
-example on Windows Server + AWS EC2 (networking, IAM, S3, nginx, PM2-as-a-service,
-TLS, cost estimates, and every gotcha hit along the way), see
-[`WINDOWS_DEPLOYMENT.md`](./WINDOWS_DEPLOYMENT.md) — it's a step-by-step runbook,
-not just reference docs.
+| Dependency | Why | Env var(s) |
+|---|---|---|
+| **MongoDB Atlas cluster** | Primary datastore — not self-hosted Mongo | `MONGODB_URI` |
+| **Compute instance** (EC2 or equivalent) reachable on 80/443 | Runs the Node process behind nginx | — |
+| **S3 bucket** | Menu/restaurant image uploads | `S3_BUCKET_NAME`, `AWS_REGION` |
+| **IAM role attached to the instance** with `s3:PutObject`/`s3:GetObject` on that bucket only | `backend/routes/uploadRoutes.js` has no AWS keys in it by design — credentials come from the instance role | — |
+| **Gmail App Password** | Nodemailer sends OTP, order-status, and promo emails | `EMAIL_USER`, `EMAIL_PASS` |
+| **Domain + TLS cert** (optional but recommended) | win-acme/certbot can't issue a cert for a bare IP | `CLIENT_URL` |
 
-### 1. Provision the dependencies
-- A **MongoDB Atlas** cluster (connection string, and the deploy target's
-  outbound IP added to Atlas → Network Access).
-- An **S3 bucket** for image uploads, plus an **IAM role** attached to the
-  compute instance with `s3:PutObject` / `s3:GetObject` on that bucket only.
-  `backend/routes/uploadRoutes.js` deliberately has no AWS access keys —
-  it relies entirely on instance-attached IAM credentials.
-- A **Gmail App Password** for transactional email (OTP, order status, promo
-  notifications) via Nodemailer.
+---
 
-### 2. Configure environment variables
-Copy both example files and fill them in — see the [Environment Variables](#-environment-variables) section below for what each one does.
+## Deploy
+
+### 1. Configure environment
 ```bash
 cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env
 ```
-`frontend/.env`'s `REACT_APP_API_URL` is **baked in at build time** by
-Create React App — set it correctly *before* building, and rebuild (don't
-just restart) if it ever changes (e.g. once a domain + TLS replace a bare IP).
+Fill in both using the [Environment Variables](#environment-variables) table
+below. `frontend/.env`'s `REACT_APP_API_URL` is **baked in at build time** by
+Create React App — get it right *before* step 2, and rebuild (not just
+restart) whenever it changes (e.g. bare IP → real domain later).
 
-### 3. Install, build, run
+### 2. Install and build
 ```bash
-# Backend
-cd backend
-npm install
-npm start               # or: pm2 start server.js --name foodorder
-
-# Frontend — build once, the backend serves the output
-cd ../frontend
-npm install
-npm run build
+cd backend  && npm install
+cd ../frontend && npm install && npm run build
 ```
-With `NODE_ENV=production` set, `backend/server.js` now serves both the API
-and `frontend/build` on the same port (`PORT`, default `8000`).
 
-### 4. Seed initial data (optional, first boot only)
+### 3. Run the backend under a process manager
+```bash
+cd backend
+pm2 start server.js --name foodorder --env production
+pm2 save
+```
+With `NODE_ENV=production`, this single process now serves the API **and**
+`frontend/build` on `PORT` (default `8000`). Don't run `npm start` directly
+in production — PM2 (or an equivalent supervisor) is what restarts the app on
+crash and on host reboot.
+
+### 4. Front it with a reverse proxy
+nginx (or equivalent) terminates TLS and proxies `/` to
+`http://127.0.0.1:<PORT>`, forwarding `Upgrade`/`Connection: upgrade` headers
+— Socket.io needs these to work through the proxy. **Never expose the Node
+port directly to the internet.**
+
+### 5. Seed the database (first boot only)
 ```bash
 cd backend
 node seed-data.js
 ```
-⚠️ **This wipes every collection first** (`deleteMany({})` on Users,
+⚠️ **Destructive**: wipes every collection (`deleteMany({})` on Users,
 Restaurants, MenuItems, Orders, Reviews, Favorites, PromoCodes) before
-reseeding — only run it against a fresh database, never against one with
-real user data. See [Seed Data](#-seed-data) below for exactly what it creates.
+reseeding. Only run against a fresh database — see [Seed Data](#seed-data).
 
-### 5. Put a reverse proxy in front
-nginx (or equivalent) should terminate TLS and proxy `/` to
-`http://127.0.0.1:<PORT>`, forwarding WebSocket upgrade headers
-(`Upgrade`/`Connection: upgrade`) — Socket.io needs these for live order
-tracking to work through the proxy. Do **not** expose the Node port directly
-to the internet.
-
-### 6. Verify
-- `GET /health` → `{"status":"ok","db":"connected"}` — wire this into your
-  load balancer / uptime monitor.
-- Smoke test end-to-end: register/login, browse restaurants, place an order,
-  upload a menu image (exercises the S3 + IAM role path), confirm Socket.io
-  live status updates work *through* the proxy, not just directly against
-  the Node port.
+### 6. Verify the deployment
+- `GET /health` → `{"status":"ok","db":"connected"}`. Wire this into the load
+  balancer / uptime monitor — `503` + `db: "not connected"` means Mongo is
+  unreachable.
+- Log in with a seeded account, place an order, upload a menu image (exercises
+  the S3 + IAM role path end-to-end), and confirm Socket.io status updates
+  arrive live — through the proxy, not just directly against the Node port.
 
 ---
 
-## 🔐 Environment Variables
+## Environment Variables
 
 ### `backend/.env`
 | Variable | Purpose |
 |---|---|
 | `PORT` | Port the Node process listens on (default `8000`). |
-| `NODE_ENV` | Set to `production` to serve the built React app + enable the production error-message policy. |
+| `NODE_ENV` | Must be `production` to serve the built frontend + suppress internal error details in API responses. |
 | `MONGODB_URI` | MongoDB Atlas connection string. |
-| `JWT_SECRET` | Secret for signing auth tokens — generate fresh per deployment, never reuse across environments. |
+| `JWT_SECRET` | Signs auth tokens — generate fresh per deployment, never reuse across environments. |
 | `JWT_EXPIRE` | Token lifetime, e.g. `30d`. |
-| `CLIENT_URL` | Used for CORS and Socket.io's allowed origin — must match the public URL the frontend is actually served from. |
-| `EMAIL_USER` / `EMAIL_PASS` | Gmail address + App Password for Nodemailer (OTP, order, promo emails). |
+| `CLIENT_URL` | CORS + Socket.io allowed origin — must match the public URL the frontend is actually served from. |
+| `EMAIL_USER` / `EMAIL_PASS` | Gmail address + App Password for Nodemailer. |
 | `AWS_REGION` | Region the S3 bucket lives in. |
-| `S3_BUCKET_NAME` | Bucket for uploaded menu/restaurant images. |
-| `CLOUDFRONT_URL` | Optional CDN in front of the bucket — leave blank to serve image URLs directly from S3. |
+| `S3_BUCKET_NAME` | Bucket for uploaded images. |
+| `CLOUDFRONT_URL` | Optional CDN in front of the bucket — blank serves image URLs directly from S3. |
 
 ### `frontend/.env`
 | Variable | Purpose |
 |---|---|
-| `REACT_APP_API_URL` | Base URL the frontend calls for the API. **Baked in at build time** — changing it requires a rebuild, not just a restart. |
+| `REACT_APP_API_URL` | API base URL. **Baked in at build time** — a rebuild is required after any change. |
 
 ---
 
-## 🩺 Operational Notes
+## Operations
 
-- **Health check**: `GET /health` reports `200` + `db: "connected"` when
-  Mongo is up, `503` + `db: "not connected"` otherwise — safe to use as a load
-  balancer target-group check.
-- **MongoDB reconnection**: the backend retries the Atlas connection every 5s
-  on failure rather than crashing — a transient Atlas blip doesn't require a
-  process restart.
-- **Scheduled orders**: a 60-second interval (started once Mongo connects)
-  auto-confirms orders whose customer-chosen delivery time has arrived.
-- **Image cache headers**: `/uploads` is served with `Cache-Control:
-  public, max-age=604800` (7 days).
-- **Process manager**: run under PM2 (or your platform's equivalent) so the
-  app restarts on crash and on host reboot — see `WINDOWS_DEPLOYMENT.md` for
-  registering PM2 as a native Windows Service.
+- **Health check**: `GET /health` → `200`/`db:"connected"` when Mongo is up,
+  `503`/`db:"not connected"` otherwise. Use it as the load-balancer target
+  check.
+- **Mongo reconnection**: on connection failure the backend retries every 5s
+  instead of crashing — a transient Atlas blip doesn't need a process restart.
+- **Scheduled orders**: a 60s interval (starts once Mongo connects)
+  auto-confirms orders whose customer-chosen delivery time has arrived. If
+  this stops happening, check the process is actually running, not just the
+  reverse proxy.
+- **Image caching**: `/uploads` is served with `Cache-Control: public,
+  max-age=604800` (7 days) — account for this when testing a just-replaced image.
+- **Deploying an update**: `git pull`, reinstall if `package.json` changed,
+  `npm run build` in `frontend/` (always, even for backend-only changes that
+  touch shared config), then `pm2 restart foodorder`. Restart (not just
+  `.env` edit) is required for env var changes to take effect.
+- **Rolling back**: `git checkout <previous-tag-or-commit>`, repeat the build
+  + restart steps. There's no blue/green or multi-instance setup here — a
+  rollback means a few seconds of downtime.
 
 ---
 
-## 🌱 Seed Data
+## Seed Data
 
 `backend/seed-data.js` populates every collection with a consistent demo
-dataset — useful for a fresh deployment's first login, or for resetting a
-staging environment:
+dataset — useful for a fresh deployment's first login, or resetting staging:
 
-- **3 users**: `customer@gmail.com`, `owner@gmail.com`, `admin@gmail.com` (all password `pass123`)
+- **3 users**: `customer@gmail.com`, `owner@gmail.com`, `admin@gmail.com` (password `pass123`)
 - **8 restaurants** (Pizza Palace, Sri Balaji Fast Food Corner, Burger Kingdom,
   Spice Garden, Pure Veg Bhavan, Non-Veg Corner, Biryani Junction, Crispy
   Fried Chicken) × **6 menu items each** (48 total)
-- **13 orders** for the customer, covering every order status
-- **4 restaurant favorites**, **5 reviews** (with auto-recalculated restaurant
-  ratings), and **3 promo codes** (two global, one restaurant-specific daily promo)
+- **13 orders** covering every order status, **4 favorites**, **5 reviews**
+  (auto-recalculates restaurant ratings), **3 promo codes**
 
-Run it with `node seed-data.js` from `backend/`. It connects using
-`MONGODB_URI` from `.env` — point that at the right database before running.
+Connects using `MONGODB_URI` from `.env` — point that at the intended
+database before running.
+
+---
+
+## What's actually running (for context, not a feature pitch)
+
+Customer-facing: auth with OTP email verification, restaurant browsing with
+live open/closed state, cart, promo codes (global + per-restaurant daily
+auto-apply), loyalty points, scheduled delivery, live Socket.io order
+tracking, in-app notifications.
+
+Restaurant-owner-facing: live order dashboard, menu/image management, daily
+promo creation, review replies, opening-hours config.
+
+Admin-facing: user/restaurant management, platform-wide order visibility,
+global promo codes.
+
+Stack: React + React Router + Axios · Node/Express · MongoDB Atlas/Mongoose ·
+Socket.io · JWT + OTP auth · Nodemailer (Gmail) · AWS S3 via IAM role · nginx
++ PM2 on AWS EC2 (Windows Server).
 
 ---
 
-## ✨ Features
-
-### 👤 Customer
-- OTP-based email registration & forgot password
-- Browse restaurants with real-time open/closed status
-- Multi-restaurant cart with persistent storage
-- Smart promo codes (specific item discounts + auto-apply daily deals)
-- Loyalty points system (Bronze → Silver → Gold → Platinum)
-- Schedule delivery for a specific date & time
-- Real-time order tracking with live status updates (Socket.io)
-- In-app notifications with unread badge
-
-### 🏪 Restaurant Owner
-- Dashboard with live order notifications (no page refresh needed)
-- Update order status in real-time
-- Menu management with image uploads
-- Create daily promo codes for customers
-- Reply to customer reviews
-- Set opening hours & weekly off days
-
-### 👨‍💼 Admin
-- Manage all users (activate/deactivate)
-- Manage all restaurants
-- View all orders platform-wide
-- Create global promo codes
-
-## 🛠️ Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| Frontend | React.js, React Router, Axios |
-| Backend | Node.js, Express.js |
-| Database | MongoDB Atlas, Mongoose |
-| Real-time | Socket.io |
-| Auth | JWT + OTP Email Verification |
-| Email | Nodemailer (Gmail) |
-| File storage | AWS S3 (via instance IAM role) |
-| Deployment | AWS EC2 (Windows Server), nginx, PM2 |
-
-## 📁 Project Structure
-```
-food-ordering-app/
-├── backend/
-│   ├── controllers/    # Business logic
-│   ├── models/         # MongoDB schemas
-│   ├── routes/         # API endpoints
-│   ├── middleware/     # Auth middleware
-│   ├── utils/          # Email service
-│   ├── seed-data.js    # Demo data for a fresh deployment
-│   └── server.js       # Entry point — API + production static serving
-└── frontend/
-    └── src/
-        ├── pages/       # All page components
-        ├── context/     # Auth & Cart context
-        └── components/  # Navbar, Footer
-```
-
-## 🧑‍💻 Local Development (optional)
-
-The app is designed around the single-process production model above, but
-you can still run frontend and backend separately for development:
-
-```bash
-# Backend (API only — NODE_ENV left unset or non-production)
-cd backend && npm install && npm start
-
-# Frontend (separate dev server with hot reload)
-cd frontend && npm install && npm start
-```
-
----
-> Built with AI-assisted development (Claude AI) —
-> reflecting modern developer workflow
+Need to run this outside a deployment (debugging a bug locally, say)? API-only
+backend: `cd backend && npm install && npm start` (leave `NODE_ENV` unset).
+Separate hot-reload frontend: `cd frontend && npm install && npm start`. This
+is a fallback for poking at the code, not the intended way to run the app.
